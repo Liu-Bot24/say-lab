@@ -1,0 +1,9 @@
+config.json
+data/
+dist/
+*.tmp
+*.bak
+*.log
+bin/
+/say-lab
+.DS_Store

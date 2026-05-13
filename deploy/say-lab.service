@@ -1,0 +1,19 @@
+[Unit]
+Description=Say Lab pronunciation coach
+After=network.target
+
+[Service]
+Type=simple
+User=www
+Group=www
+WorkingDirectory=/www/wwwroot/say-lab
+ExecStart=/www/wwwroot/say-lab/say-lab -config /www/wwwroot/say-lab/config.json
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/www/wwwroot/say-lab
+
+[Install]
+WantedBy=multi-user.target
