@@ -52,10 +52,10 @@ Example configuration. Do not include comments in production; keep it as standar
 
   // TTS settings for reading input text and generated scripts.
   "tts": {
-    // auto selects an available provider from auto_order.
+    // auto selects a configured and available TTS provider.
     "default_provider": "auto",
 
-    // Provider order. For custom TTS only, use ["custom"].
+    // Provider priority. If only custom TTS is configured, auto can stay unchanged.
     "auto_order": ["google_chirp", "google_wavenet"],
 
     // Monthly character limits. auto tries the next provider after a limit is reached.
@@ -64,14 +64,25 @@ Example configuration. Do not include comments in production; keep it as standar
       "google_wavenet": 4000000
     },
 
-    // Google TTS relay, optional. Leave empty if you do not need a relay.
+    // Google TTS. Fill the matching fields from a Google Cloud service account.
+    "google": {
+      "project_id": "",
+      "client_email": "",
+      "private_key": "",
+      "private_key_id": "",
+      "token_url": "https://oauth2.googleapis.com/token",
+      "tts_url": "https://texttospeech.googleapis.com/v1/text:synthesize",
+      "timeout": 60
+    },
+
+    // Google TTS relay, optional. It is not shown in the web configuration panel.
     "google_relay": {
       "endpoint": "",
       "relay_secret": "",
       "timeout": 60
     },
 
-    // Custom TTS. Set default_provider to custom when using it.
+    // Custom TTS. To use only custom TTS, fill this section and keep default_provider as auto.
     "custom": {
       "base_url": "",
       "api_key": "",
@@ -96,11 +107,12 @@ If deployed on a server in mainland China, a relay service may be needed.
 | `listen` | Service listen address | Keep `127.0.0.1:5567` behind a reverse proxy |
 | `data_file` | Monthly TTS usage counter | Default: `data/usage.json` |
 | `llm.*` | Chat model for pronunciation notes and scripts | Fill `base_url`, `model`, and `api_key` |
-| `tts.default_provider` | Default speech provider | Use `auto` for the Google example; use `custom` for custom TTS |
-| `tts.auto_order` | Provider order when `auto` is used | Google example: `google_chirp`, `google_wavenet` |
+| `tts.default_provider` | Default speech provider | Usually keep `auto` |
+| `tts.auto_order` | Provider order when `auto` is used | Default order: `google_chirp`, `google_wavenet`, `custom` |
 | `tts.monthly_limits` | Monthly character limit by provider | When one reaches its limit, `auto` tries the next provider |
-| `tts.google_relay.*` | Google TTS relay | Fill `endpoint` and `relay_secret` only when needed |
-| `tts.custom.*` | Custom TTS | Fill it and set `tts.default_provider` to `custom` |
+| `tts.google.*` | Google TTS | Fill `project_id`, `client_email`, and `private_key` |
+| `tts.google_relay.*` | Google TTS relay | Fill it in config or environment variables only when needed |
+| `tts.custom.*` | Custom TTS | OpenAI-compatible Speech API |
 
 Common environment variables:
 
@@ -108,10 +120,25 @@ Common environment variables:
 | --- | --- |
 | `SAY_CONFIG` | Config file path |
 | `SAY_LLM_API_KEY` | `llm.api_key` |
+| `SAY_LLM_BASE_URL` | `llm.base_url` |
+| `SAY_LLM_ENDPOINT` | `llm.endpoint` |
+| `SAY_LLM_MODEL` | `llm.model` |
+| `SAY_LLM_TIMEOUT` | `llm.timeout` |
+| `SAY_GOOGLE_PROJECT_ID` | `tts.google.project_id` |
+| `SAY_GOOGLE_CLIENT_EMAIL` | `tts.google.client_email` |
+| `SAY_GOOGLE_PRIVATE_KEY_ID` | `tts.google.private_key_id` |
+| `SAY_GOOGLE_PRIVATE_KEY` | `tts.google.private_key` |
+| `SAY_GOOGLE_TTS_URL` | `tts.google.tts_url` |
 | `SAY_GOOGLE_RELAY_SECRET` | `tts.google_relay.relay_secret` |
+| `SAY_GOOGLE_RELAY_ENDPOINT` | `tts.google_relay.endpoint` |
+| `SAY_TTS_DEFAULT_PROVIDER` | `tts.default_provider` |
+| `SAY_TTS_AUTO_ORDER` | `tts.auto_order` |
 | `SAY_TTS_CUSTOM_API_KEY` | `tts.custom.api_key` |
+| `SAY_TTS_CUSTOM_BASE_URL` | `tts.custom.base_url` |
+| `SAY_TTS_CUSTOM_MODEL` | `tts.custom.model` |
+| `SAY_TTS_CUSTOM_VOICE` | `tts.custom.voice` |
 
-You can also configure Say Lab from the web UI.
+You can also configure the LLM, Google TTS, custom TTS, and TTS routing from the web UI.
 
 ![Say Lab configuration panel screenshot](docs/images/say-lab-config.jpg)
 

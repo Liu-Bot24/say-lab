@@ -3,9 +3,14 @@ package main
 import (
 	"bytes"
 	"crypto/hmac"
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -47,6 +52,109 @@ func TestChooseProviderPrefersGoogleChirpThenFallsBackToWaveNet(t *testing.T) {
 	}
 	if chosen != "google_wavenet" {
 		t.Fatalf("expected google_wavenet fallback, got %s", chosen)
+	}
+}
+
+func TestChooseProviderAutoFallsBackToConfiguredCustom(t *testing.T) {
+	app := &App{
+		cfg: Config{TTS: TTSConfig{
+			AutoOrder: []string{"google_chirp", "google_wavenet"},
+			Custom: CustomTTS{
+				BaseURL: "https://tts.example.com/v1",
+				APIKey:  "custom-key",
+				Model:   "tts-model",
+				Voice:   "tts-voice",
+			},
+		}},
+		usage: &UsageStore{Data: map[string]map[string]int{}},
+	}
+
+	chosen, err := app.chooseProvider("auto", 5)
+	if err != nil {
+		t.Fatalf("chooseProvider returned error: %v", err)
+	}
+	if chosen != "custom" {
+		t.Fatalf("expected custom fallback, got %s", chosen)
+	}
+}
+
+func TestHandleTTSAutoFallsBackToConfiguredCustom(t *testing.T) {
+	var sawCustomRequest bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/audio/speech" {
+			t.Fatalf("unexpected custom TTS path: %s", r.URL.Path)
+		}
+		sawCustomRequest = true
+		w.Header().Set("Content-Type", "audio/mpeg")
+		_, _ = w.Write([]byte("custom-audio"))
+	}))
+	defer server.Close()
+
+	app := &App{
+		cfg: Config{TTS: TTSConfig{
+			DefaultProvider: "auto",
+			AutoOrder:       []string{"google_chirp", "google_wavenet"},
+			Custom: CustomTTS{
+				BaseURL:        server.URL,
+				APIKey:         "custom-key",
+				Model:          "tts-model",
+				Voice:          "tts-voice",
+				ResponseFormat: "mp3",
+				Speed:          1,
+				Timeout:        5,
+			},
+		}},
+		usage: &UsageStore{file: filepath.Join(t.TempDir(), "usage.json"), Data: map[string]map[string]int{}},
+	}
+	body := bytes.NewBufferString(`{"text":"hello","provider":"auto"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/tts", body)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	app.handleTTS(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status code = %d body = %s", rec.Code, rec.Body.String())
+	}
+	if !sawCustomRequest {
+		t.Fatal("custom TTS was not called")
+	}
+	if got := rec.Header().Get("X-Say-Provider"); got != "custom" {
+		t.Fatalf("provider header = %q, want custom", got)
+	}
+	if rec.Body.String() != "custom-audio" {
+		t.Fatalf("audio body = %q", rec.Body.String())
+	}
+}
+
+func TestCurrentProviderStatusUsesConfiguredCustomFallback(t *testing.T) {
+	app := &App{
+		cfg: Config{TTS: TTSConfig{
+			AutoOrder: []string{"google_chirp", "google_wavenet"},
+			Labels:    map[string]string{"custom": "Custom TTS"},
+			Custom: CustomTTS{
+				BaseURL: "https://tts.example.com/v1",
+				APIKey:  "custom-key",
+				Model:   "tts-model",
+				Voice:   "tts-voice",
+			},
+		}},
+		usage: &UsageStore{Data: map[string]map[string]int{}},
+	}
+
+	current := app.currentProviderStatus(app.ttsProviders())
+	provider, ok := current.(struct {
+		Name       string `json:"name"`
+		Label      string `json:"label"`
+		Configured bool   `json:"configured"`
+		Used       int    `json:"used"`
+		Limit      int    `json:"limit"`
+	})
+	if !ok {
+		t.Fatalf("unexpected current provider type: %T", current)
+	}
+	if provider.Name != "custom" {
+		t.Fatalf("expected custom current provider, got %s", provider.Name)
 	}
 }
 
@@ -220,6 +328,81 @@ func TestCallGoogleRelayTTSAutoLanguageSendsMandarinCode(t *testing.T) {
 	}
 }
 
+func TestCallGoogleDirectTTSUsesServiceAccountJSON(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 1024)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	privateKey := pem.EncodeToMemory(&pem.Block{
+		Type:  "PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(key),
+	})
+
+	var sawTokenRequest bool
+	var sawGoogleAuth string
+	var sawVoice string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/token":
+			sawTokenRequest = true
+			if err := r.ParseForm(); err != nil {
+				t.Fatalf("parse form: %v", err)
+			}
+			if r.Form.Get("grant_type") == "" || r.Form.Get("assertion") == "" {
+				t.Fatalf("missing token form fields: %s", r.Form.Encode())
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"access_token":"google-token","expires_in":3600}`))
+		case "/v1/text:synthesize":
+			sawGoogleAuth = r.Header.Get("Authorization")
+			body := readAllForTest(t, r)
+			var payload struct {
+				Voice struct {
+					Name string `json:"name"`
+				} `json:"voice"`
+			}
+			if err := json.Unmarshal(body, &payload); err != nil {
+				t.Fatalf("bad google payload: %v", err)
+			}
+			sawVoice = payload.Voice.Name
+			w.Header().Set("Content-Type", "application/json")
+			audio := base64.StdEncoding.EncodeToString([]byte("mp3-bytes"))
+			_, _ = w.Write([]byte(`{"audioContent":"` + audio + `"}`))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	app := &App{cfg: Config{TTS: TTSConfig{Google: GoogleTTS{
+		ClientEmail: "tts@example.iam.gserviceaccount.com",
+		PrivateKey:  string(privateKey),
+		TokenURL:    server.URL + "/token",
+		TTSURL:      server.URL + "/v1/text:synthesize",
+		Timeout:     5,
+	}}}}
+	audio, contentType, voice, err := app.callGoogleRelayTTS(ttsRequest{
+		Text:     "hello",
+		Language: "en-US",
+		Speed:    0.9,
+	}, "google_chirp")
+	if err != nil {
+		t.Fatalf("callGoogleRelayTTS returned error: %v", err)
+	}
+	if !sawTokenRequest {
+		t.Fatal("token endpoint was not called")
+	}
+	if sawGoogleAuth != "Bearer google-token" {
+		t.Fatalf("bad google auth header: %s", sawGoogleAuth)
+	}
+	if sawVoice != "en-US-Chirp3-HD-Charon" || voice != sawVoice {
+		t.Fatalf("unexpected voice: payload=%s returned=%s", sawVoice, voice)
+	}
+	if string(audio) != "mp3-bytes" || contentType != "audio/mpeg" {
+		t.Fatalf("unexpected audio response: %q %s", string(audio), contentType)
+	}
+}
+
 func TestAnalyzeIncludesTranslationLanguageInLLMPrompt(t *testing.T) {
 	var sawUserPrompt string
 	var sawSystemPrompt string
@@ -312,6 +495,10 @@ func TestHandleConfigMasksSecretsAndPreservesThemOnSave(t *testing.T) {
 					"google_chirp": 800000,
 					"custom":       800000,
 				},
+				Google: GoogleTTS{
+					ServiceAccountJSON: `{"client_email":"service@example.com","private_key":"secret"}`,
+					Timeout:            60,
+				},
 				GoogleRelay: GoogleRelayTTS{
 					Endpoint:    "https://relay.example/v1/tts",
 					RelaySecret: "relay-secret",
@@ -344,10 +531,10 @@ func TestHandleConfigMasksSecretsAndPreservesThemOnSave(t *testing.T) {
 	if err := json.Unmarshal(getRec.Body.Bytes(), &getResp); err != nil {
 		t.Fatalf("bad config response: %v", err)
 	}
-	if getResp.Config.LLM.APIKey != "" || getResp.Config.TTS.GoogleRelay.RelaySecret != "" || getResp.Config.TTS.Custom.APIKey != "" {
+	if getResp.Config.LLM.APIKey != "" || getResp.Config.TTS.Google.ServiceAccountJSON != "" || getResp.Config.TTS.GoogleRelay.RelaySecret != "" || getResp.Config.TTS.Custom.APIKey != "" {
 		t.Fatalf("config response leaked secrets: %+v", getResp.Config)
 	}
-	if !getResp.Secrets.LLMAPIKey || !getResp.Secrets.GoogleRelaySecret || !getResp.Secrets.CustomAPIKey {
+	if !getResp.Secrets.LLMAPIKey || !getResp.Secrets.GoogleServiceAccountJSON || !getResp.Secrets.GoogleRelaySecret || !getResp.Secrets.CustomAPIKey {
 		t.Fatalf("secret status did not report configured secrets: %+v", getResp.Secrets)
 	}
 
@@ -364,7 +551,7 @@ func TestHandleConfigMasksSecretsAndPreservesThemOnSave(t *testing.T) {
 	if app.cfg.LLM.Model != "updated-model" {
 		t.Fatalf("model was not updated: %s", app.cfg.LLM.Model)
 	}
-	if app.cfg.LLM.APIKey != "llm-secret" || app.cfg.TTS.GoogleRelay.RelaySecret != "relay-secret" || app.cfg.TTS.Custom.APIKey != "custom-secret" {
+	if app.cfg.LLM.APIKey != "llm-secret" || app.cfg.TTS.Google.PrivateKey == "" || app.cfg.TTS.GoogleRelay.RelaySecret != "relay-secret" || app.cfg.TTS.Custom.APIKey != "custom-secret" {
 		t.Fatalf("existing secrets were not preserved: %+v", app.cfg)
 	}
 }

@@ -2,11 +2,17 @@ package main
 
 import (
 	"bytes"
+	"crypto"
 	"crypto/hmac"
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/x509"
 	"embed"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"flag"
 	"fmt"
@@ -15,6 +21,7 @@ import (
 	"log"
 	"mime"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -47,10 +54,22 @@ type TTSConfig struct {
 	DefaultProvider string              `json:"default_provider"`
 	AutoOrder       []string            `json:"auto_order"`
 	MonthlyLimits   map[string]int      `json:"monthly_limits"`
+	Google          GoogleTTS           `json:"google"`
 	GoogleRelay     GoogleRelayTTS      `json:"google_relay"`
 	Custom          CustomTTS           `json:"custom"`
 	Labels          map[string]string   `json:"labels"`
 	VoiceHints      map[string][]string `json:"voice_hints"`
+}
+
+type GoogleTTS struct {
+	ServiceAccountJSON string `json:"service_account_json,omitempty"`
+	ProjectID          string `json:"project_id"`
+	PrivateKeyID       string `json:"private_key_id"`
+	ClientEmail        string `json:"client_email"`
+	PrivateKey         string `json:"private_key"`
+	TokenURL           string `json:"token_url"`
+	TTSURL             string `json:"tts_url"`
+	Timeout            int    `json:"timeout"`
 }
 
 type GoogleRelayTTS struct {
@@ -75,6 +94,13 @@ type App struct {
 	configPath     string
 	configSource   string
 	configWritable bool
+	tokenMu        sync.Mutex
+	googleToken    cachedGoogleToken
+}
+
+type cachedGoogleToken struct {
+	Value     string
+	ExpiresAt time.Time
 }
 
 type UsageStore struct {
@@ -168,6 +194,11 @@ func defaultConfig() Config {
 				"ja": {"ja-JP"},
 				"zh": {"zh-CN", "zh-TW"},
 			},
+			Google: GoogleTTS{
+				TokenURL: "https://oauth2.googleapis.com/token",
+				TTSURL:   "https://texttospeech.googleapis.com/v1/text:synthesize",
+				Timeout:  60,
+			},
 			GoogleRelay: GoogleRelayTTS{
 				Timeout: 60,
 			},
@@ -211,6 +242,7 @@ func loadConfig(path string) (LoadedConfig, error) {
 
 func normalizeConfig(cfg *Config) {
 	defaults := defaultConfig()
+	migrateGoogleServiceAccount(&cfg.TTS.Google)
 	if cfg.Listen == "" {
 		cfg.Listen = defaults.Listen
 	}
@@ -259,6 +291,16 @@ func normalizeConfig(cfg *Config) {
 	if cfg.TTS.GoogleRelay.Timeout == 0 {
 		cfg.TTS.GoogleRelay.Timeout = defaults.TTS.GoogleRelay.Timeout
 	}
+	if cfg.TTS.Google.TokenURL == "" {
+		cfg.TTS.Google.TokenURL = defaults.TTS.Google.TokenURL
+	}
+	if cfg.TTS.Google.TTSURL == "" {
+		cfg.TTS.Google.TTSURL = defaults.TTS.Google.TTSURL
+	}
+	if cfg.TTS.Google.Timeout == 0 {
+		cfg.TTS.Google.Timeout = defaults.TTS.Google.Timeout
+	}
+	cfg.TTS.Google.ServiceAccountJSON = ""
 	if cfg.TTS.Custom.ResponseFormat == "" {
 		cfg.TTS.Custom.ResponseFormat = defaults.TTS.Custom.ResponseFormat
 	}
@@ -279,6 +321,31 @@ func providerInOrder(order []string, provider string) bool {
 	return false
 }
 
+func migrateGoogleServiceAccount(cfg *GoogleTTS) {
+	if strings.TrimSpace(cfg.ServiceAccountJSON) == "" {
+		return
+	}
+	account, err := parseGoogleServiceAccountJSON(cfg.ServiceAccountJSON)
+	if err != nil {
+		return
+	}
+	if cfg.ProjectID == "" {
+		cfg.ProjectID = account.ProjectID
+	}
+	if cfg.PrivateKeyID == "" {
+		cfg.PrivateKeyID = account.PrivateKeyID
+	}
+	if cfg.ClientEmail == "" {
+		cfg.ClientEmail = account.ClientEmail
+	}
+	if cfg.PrivateKey == "" {
+		cfg.PrivateKey = account.PrivateKey
+	}
+	if cfg.TokenURL == "" {
+		cfg.TokenURL = account.TokenURI
+	}
+}
+
 func applyEnvConfig(cfg *Config) {
 	setStringFromEnv(&cfg.LLM.BaseURL, "SAY_LLM_BASE_URL")
 	setStringFromEnv(&cfg.LLM.Endpoint, "SAY_LLM_ENDPOINT")
@@ -294,6 +361,15 @@ func applyEnvConfig(cfg *Config) {
 	setMonthlyLimitFromEnv(cfg, "google_chirp", "SAY_TTS_GOOGLE_CHIRP_MONTHLY_LIMIT")
 	setMonthlyLimitFromEnv(cfg, "google_wavenet", "SAY_TTS_GOOGLE_WAVENET_MONTHLY_LIMIT")
 	setMonthlyLimitFromEnv(cfg, "custom", "SAY_TTS_CUSTOM_MONTHLY_LIMIT")
+
+	setStringFromEnv(&cfg.TTS.Google.ServiceAccountJSON, "SAY_GOOGLE_SERVICE_ACCOUNT_JSON", "SAY_GOOGLE_TTS_SERVICE_ACCOUNT_JSON")
+	setStringFromEnv(&cfg.TTS.Google.ProjectID, "SAY_GOOGLE_PROJECT_ID")
+	setStringFromEnv(&cfg.TTS.Google.PrivateKeyID, "SAY_GOOGLE_PRIVATE_KEY_ID")
+	setStringFromEnv(&cfg.TTS.Google.ClientEmail, "SAY_GOOGLE_CLIENT_EMAIL")
+	setStringFromEnv(&cfg.TTS.Google.PrivateKey, "SAY_GOOGLE_PRIVATE_KEY")
+	setStringFromEnv(&cfg.TTS.Google.TokenURL, "SAY_GOOGLE_TOKEN_URL")
+	setStringFromEnv(&cfg.TTS.Google.TTSURL, "SAY_GOOGLE_TTS_URL")
+	setIntFromEnv(&cfg.TTS.Google.Timeout, "SAY_GOOGLE_TTS_TIMEOUT")
 
 	setStringFromEnv(&cfg.TTS.GoogleRelay.Endpoint, "SAY_GOOGLE_RELAY_ENDPOINT", "SAY_GOOGLE_TTS_RELAY_ENDPOINT")
 	setStringFromEnv(&cfg.TTS.GoogleRelay.RelaySecret, "SAY_GOOGLE_RELAY_SECRET", "SAY_GOOGLE_TTS_RELAY_SECRET")
@@ -488,9 +564,11 @@ type configResponse struct {
 }
 
 type configSecretStatus struct {
-	LLMAPIKey         bool `json:"llm_api_key"`
-	GoogleRelaySecret bool `json:"google_relay_secret"`
-	CustomAPIKey      bool `json:"custom_api_key"`
+	LLMAPIKey                bool `json:"llm_api_key"`
+	GoogleServiceAccountJSON bool `json:"google_service_account_json"`
+	GooglePrivateKey         bool `json:"google_private_key"`
+	GoogleRelaySecret        bool `json:"google_relay_secret"`
+	CustomAPIKey             bool `json:"custom_api_key"`
 }
 
 type configSourceInfo struct {
@@ -517,11 +595,15 @@ func (app *App) handleConfig(w http.ResponseWriter, r *http.Request) {
 func (app *App) clientConfig() configResponse {
 	cfg := app.cfg
 	secrets := configSecretStatus{
-		LLMAPIKey:         cfg.LLM.APIKey != "",
-		GoogleRelaySecret: cfg.TTS.GoogleRelay.RelaySecret != "",
-		CustomAPIKey:      cfg.TTS.Custom.APIKey != "",
+		LLMAPIKey:                cfg.LLM.APIKey != "",
+		GoogleServiceAccountJSON: cfg.TTS.Google.ServiceAccountJSON != "",
+		GooglePrivateKey:         cfg.TTS.Google.PrivateKey != "",
+		GoogleRelaySecret:        cfg.TTS.GoogleRelay.RelaySecret != "",
+		CustomAPIKey:             cfg.TTS.Custom.APIKey != "",
 	}
 	cfg.LLM.APIKey = ""
+	cfg.TTS.Google.ServiceAccountJSON = ""
+	cfg.TTS.Google.PrivateKey = ""
 	cfg.TTS.GoogleRelay.RelaySecret = ""
 	cfg.TTS.Custom.APIKey = ""
 	return configResponse{
@@ -549,6 +631,12 @@ func (app *App) updateConfig(w http.ResponseWriter, r *http.Request) {
 	current := app.cfg
 	if strings.TrimSpace(next.LLM.APIKey) == "" {
 		next.LLM.APIKey = current.LLM.APIKey
+	}
+	if strings.TrimSpace(next.TTS.Google.ServiceAccountJSON) == "" {
+		next.TTS.Google.ServiceAccountJSON = current.TTS.Google.ServiceAccountJSON
+	}
+	if strings.TrimSpace(next.TTS.Google.PrivateKey) == "" {
+		next.TTS.Google.PrivateKey = current.TTS.Google.PrivateKey
 	}
 	if strings.TrimSpace(next.TTS.GoogleRelay.RelaySecret) == "" {
 		next.TTS.GoogleRelay.RelaySecret = current.TTS.GoogleRelay.RelaySecret
@@ -611,7 +699,7 @@ func (app *App) currentProviderStatus(providers []struct {
 	Used       int    `json:"used"`
 	Limit      int    `json:"limit"`
 }) any {
-	for _, name := range app.cfg.TTS.AutoOrder {
+	for _, name := range app.autoProviderOrder() {
 		for _, p := range providers {
 			if p.Name == name && p.Configured && app.withinLimit(p.Name, 0) {
 				return p
@@ -876,7 +964,7 @@ func (app *App) chooseProvider(provider string, chars int) (string, error) {
 		}
 		return provider, nil
 	}
-	for _, p := range app.cfg.TTS.AutoOrder {
+	for _, p := range app.autoProviderOrder() {
 		if app.providerConfigured(p) && app.withinLimit(p, chars) {
 			return p, nil
 		}
@@ -884,16 +972,45 @@ func (app *App) chooseProvider(provider string, chars int) (string, error) {
 	return "", errors.New("没有可用的云端 TTS")
 }
 
+func (app *App) autoProviderOrder() []string {
+	seen := map[string]bool{}
+	order := make([]string, 0, len(app.cfg.TTS.AutoOrder)+3)
+	for _, provider := range app.cfg.TTS.AutoOrder {
+		if provider == "" || seen[provider] {
+			continue
+		}
+		seen[provider] = true
+		order = append(order, provider)
+	}
+	for _, provider := range []string{"google_chirp", "google_wavenet", "custom"} {
+		if seen[provider] {
+			continue
+		}
+		seen[provider] = true
+		order = append(order, provider)
+	}
+	return order
+}
+
 func (app *App) providerConfigured(provider string) bool {
 	switch provider {
 	case "google_chirp", "google_wavenet":
-		return app.cfg.TTS.GoogleRelay.Endpoint != "" && app.cfg.TTS.GoogleRelay.RelaySecret != ""
+		return app.googleConfigured()
 	case "custom":
 		cfg := app.cfg.TTS.Custom
 		return cfg.BaseURL != "" && cfg.APIKey != "" && cfg.Model != "" && cfg.Voice != ""
 	default:
 		return false
 	}
+}
+
+func (app *App) googleConfigured() bool {
+	relay := app.cfg.TTS.GoogleRelay
+	if relay.Endpoint != "" && relay.RelaySecret != "" {
+		return true
+	}
+	_, err := googleServiceAccountFromConfig(app.cfg.TTS.Google)
+	return err == nil
 }
 
 func (app *App) withinLimit(provider string, chars int) bool {
@@ -906,8 +1023,11 @@ func (app *App) withinLimit(provider string, chars int) bool {
 
 func (app *App) callGoogleRelayTTS(req ttsRequest, provider string) ([]byte, string, string, error) {
 	cfg := app.cfg.TTS.GoogleRelay
+	if _, err := googleServiceAccountFromConfig(app.cfg.TTS.Google); err == nil {
+		return app.callGoogleDirectTTS(req, provider)
+	}
 	if cfg.Endpoint == "" {
-		return nil, "", "", errors.New("Google TTS relay 未配置")
+		return nil, "", "", errors.New("Google TTS 未配置")
 	}
 	if cfg.RelaySecret == "" {
 		return nil, "", "", errors.New("Google TTS relay secret 未配置")
@@ -962,6 +1082,283 @@ func (app *App) callGoogleRelayTTS(req ttsRequest, provider string) ([]byte, str
 		ct = "audio/mpeg"
 	}
 	return respBody, ct, httpResp.Header.Get("X-Say-Voice"), nil
+}
+
+type googleServiceAccount struct {
+	ProjectID    string `json:"project_id"`
+	PrivateKeyID string `json:"private_key_id"`
+	ClientEmail  string `json:"client_email"`
+	PrivateKey   string `json:"private_key"`
+	TokenURI     string `json:"token_uri"`
+}
+
+func (app *App) callGoogleDirectTTS(req ttsRequest, provider string) ([]byte, string, string, error) {
+	cfg := app.cfg.TTS.Google
+	account, err := googleServiceAccountFromConfig(cfg)
+	if err != nil {
+		return nil, "", "", err
+	}
+	timeout := cfg.Timeout
+	if timeout <= 0 {
+		timeout = 60
+	}
+	language := strings.TrimSpace(req.Language)
+	if language == "" {
+		language = guessTTSLanguage(req.Text)
+	}
+	tier := "wavenet"
+	if provider == "google_chirp" {
+		tier = "chirp3-hd"
+	}
+	voiceName := defaultGoogleVoiceName(language, tier)
+	if strings.TrimSpace(req.Voice) != "" && strings.Contains(req.Voice, "Google") {
+		voiceName = strings.TrimSpace(req.Voice)
+	}
+
+	audioConfig := map[string]any{"audioEncoding": "MP3"}
+	if tier != "chirp3-hd" && req.Speed > 0 {
+		audioConfig["speakingRate"] = req.Speed
+	}
+	payload := map[string]any{
+		"input": map[string]string{
+			"text": req.Text,
+		},
+		"voice": map[string]string{
+			"languageCode": language,
+			"name":         voiceName,
+		},
+		"audioConfig": audioConfig,
+	}
+	body, _ := json.Marshal(payload)
+	token, err := app.googleAccessToken(account, cfg, timeout)
+	if err != nil {
+		return nil, "", "", err
+	}
+	ttsURL := strings.TrimSpace(cfg.TTSURL)
+	if ttsURL == "" {
+		ttsURL = "https://texttospeech.googleapis.com/v1/text:synthesize"
+	}
+	httpReq, err := http.NewRequest(http.MethodPost, ttsURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, "", "", err
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+token)
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: time.Duration(timeout) * time.Second}
+	httpResp, err := client.Do(httpReq)
+	if err != nil {
+		return nil, "", "", err
+	}
+	defer httpResp.Body.Close()
+	respBody, _ := io.ReadAll(io.LimitReader(httpResp.Body, 16<<20))
+	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
+		return nil, "", "", fmt.Errorf("Google TTS 请求失败：%s %s", httpResp.Status, string(respBody))
+	}
+	var parsed struct {
+		AudioContent string `json:"audioContent"`
+	}
+	if err := json.Unmarshal(respBody, &parsed); err != nil {
+		return nil, "", "", err
+	}
+	audio, err := base64.StdEncoding.DecodeString(parsed.AudioContent)
+	if err != nil {
+		return nil, "", "", err
+	}
+	return audio, "audio/mpeg", voiceName, nil
+}
+
+func googleServiceAccountFromConfig(cfg GoogleTTS) (googleServiceAccount, error) {
+	account := googleServiceAccount{
+		ProjectID:    strings.TrimSpace(cfg.ProjectID),
+		PrivateKeyID: strings.TrimSpace(cfg.PrivateKeyID),
+		ClientEmail:  strings.TrimSpace(cfg.ClientEmail),
+		PrivateKey:   strings.TrimSpace(cfg.PrivateKey),
+		TokenURI:     strings.TrimSpace(cfg.TokenURL),
+	}
+	if account.ClientEmail == "" || account.PrivateKey == "" {
+		parsed, err := parseGoogleServiceAccountJSON(cfg.ServiceAccountJSON)
+		if err != nil {
+			return account, err
+		}
+		if account.ProjectID == "" {
+			account.ProjectID = parsed.ProjectID
+		}
+		if account.PrivateKeyID == "" {
+			account.PrivateKeyID = parsed.PrivateKeyID
+		}
+		if account.ClientEmail == "" {
+			account.ClientEmail = parsed.ClientEmail
+		}
+		if account.PrivateKey == "" {
+			account.PrivateKey = parsed.PrivateKey
+		}
+		if account.TokenURI == "" {
+			account.TokenURI = parsed.TokenURI
+		}
+	}
+	if strings.TrimSpace(account.ClientEmail) == "" || strings.TrimSpace(account.PrivateKey) == "" {
+		return account, errors.New("Google TTS 缺少 client_email 或 private_key")
+	}
+	if account.TokenURI == "" {
+		account.TokenURI = "https://oauth2.googleapis.com/token"
+	}
+	return account, nil
+}
+
+func parseGoogleServiceAccountJSON(raw string) (googleServiceAccount, error) {
+	var account googleServiceAccount
+	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &account); err != nil {
+		return account, fmt.Errorf("Google service account JSON 无效：%w", err)
+	}
+	if strings.TrimSpace(account.ClientEmail) == "" || strings.TrimSpace(account.PrivateKey) == "" {
+		return account, errors.New("Google service account JSON 缺少 client_email 或 private_key")
+	}
+	if account.TokenURI == "" {
+		account.TokenURI = "https://oauth2.googleapis.com/token"
+	}
+	return account, nil
+}
+
+func (app *App) googleAccessToken(account googleServiceAccount, cfg GoogleTTS, timeout int) (string, error) {
+	app.tokenMu.Lock()
+	defer app.tokenMu.Unlock()
+
+	now := time.Now()
+	if app.googleToken.Value != "" && app.googleToken.ExpiresAt.After(now.Add(60*time.Second)) {
+		return app.googleToken.Value, nil
+	}
+	assertion, err := signGoogleJWT(account, now)
+	if err != nil {
+		return "", err
+	}
+	tokenURL := strings.TrimSpace(cfg.TokenURL)
+	if tokenURL == "" {
+		tokenURL = account.TokenURI
+	}
+	account.TokenURI = tokenURL
+	form := url.Values{}
+	form.Set("grant_type", "urn:ietf:params:oauth:grant-type:jwt-bearer")
+	form.Set("assertion", assertion)
+	httpReq, err := http.NewRequest(http.MethodPost, tokenURL, strings.NewReader(form.Encode()))
+	if err != nil {
+		return "", err
+	}
+	httpReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	client := &http.Client{Timeout: time.Duration(timeout) * time.Second}
+	httpResp, err := client.Do(httpReq)
+	if err != nil {
+		return "", err
+	}
+	defer httpResp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(httpResp.Body, 2<<20))
+	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
+		return "", fmt.Errorf("Google token 请求失败：%s %s", httpResp.Status, string(body))
+	}
+	var parsed struct {
+		AccessToken string `json:"access_token"`
+		ExpiresIn   int    `json:"expires_in"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return "", err
+	}
+	if parsed.AccessToken == "" {
+		return "", errors.New("Google token 响应缺少 access_token")
+	}
+	expiresIn := parsed.ExpiresIn
+	if expiresIn <= 0 {
+		expiresIn = 3600
+	}
+	app.googleToken = cachedGoogleToken{
+		Value:     parsed.AccessToken,
+		ExpiresAt: now.Add(time.Duration(expiresIn) * time.Second),
+	}
+	return parsed.AccessToken, nil
+}
+
+func signGoogleJWT(account googleServiceAccount, now time.Time) (string, error) {
+	header := map[string]string{"alg": "RS256", "typ": "JWT"}
+	claim := map[string]any{
+		"iss":   account.ClientEmail,
+		"scope": "https://www.googleapis.com/auth/cloud-platform",
+		"aud":   account.TokenURI,
+		"exp":   now.Add(time.Hour).Unix(),
+		"iat":   now.Unix(),
+	}
+	signingInput := base64URLJSON(header) + "." + base64URLJSON(claim)
+	privateKey, err := parseRSAPrivateKey(account.PrivateKey)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256([]byte(signingInput))
+	signature, err := rsa.SignPKCS1v15(rand.Reader, privateKey, crypto.SHA256, digest[:])
+	if err != nil {
+		return "", err
+	}
+	return signingInput + "." + base64.RawURLEncoding.EncodeToString(signature), nil
+}
+
+func parseRSAPrivateKey(raw string) (*rsa.PrivateKey, error) {
+	block, _ := pem.Decode([]byte(strings.ReplaceAll(raw, `\n`, "\n")))
+	if block == nil {
+		return nil, errors.New("Google private_key 不是有效 PEM")
+	}
+	if key, err := x509.ParsePKCS8PrivateKey(block.Bytes); err == nil {
+		if rsaKey, ok := key.(*rsa.PrivateKey); ok {
+			return rsaKey, nil
+		}
+		return nil, errors.New("Google private_key 不是 RSA key")
+	}
+	return x509.ParsePKCS1PrivateKey(block.Bytes)
+}
+
+func base64URLJSON(value any) string {
+	b, _ := json.Marshal(value)
+	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+func defaultGoogleVoiceName(languageCode, tier string) string {
+	if strings.Contains(strings.ToLower(tier), "chirp") {
+		voices := map[string]string{
+			"ar-XA":  "ar-XA-Chirp3-HD-Charon",
+			"bn-IN":  "bn-IN-Chirp3-HD-Charon",
+			"cmn-CN": "cmn-CN-Chirp3-HD-Charon",
+			"de-DE":  "de-DE-Chirp3-HD-Charon",
+			"en-GB":  "en-GB-Chirp3-HD-Charon",
+			"en-US":  "en-US-Chirp3-HD-Charon",
+			"es-ES":  "es-ES-Chirp3-HD-Charon",
+			"fr-FR":  "fr-FR-Chirp3-HD-Charon",
+			"hi-IN":  "hi-IN-Chirp3-HD-Charon",
+			"ja-JP":  "ja-JP-Chirp3-HD-Charon",
+			"ko-KR":  "ko-KR-Chirp3-HD-Charon",
+			"pt-BR":  "pt-BR-Chirp3-HD-Charon",
+			"ru-RU":  "ru-RU-Chirp3-HD-Charon",
+		}
+		if voice := voices[languageCode]; voice != "" {
+			return voice
+		}
+		return "en-US-Chirp3-HD-Charon"
+	}
+	voices := map[string]string{
+		"ar-XA":  "ar-XA-Wavenet-B",
+		"bn-IN":  "bn-IN-Wavenet-B",
+		"cmn-CN": "cmn-CN-Wavenet-A",
+		"de-DE":  "de-DE-Wavenet-B",
+		"en-GB":  "en-GB-Wavenet-B",
+		"en-US":  "en-US-Wavenet-D",
+		"es-ES":  "es-ES-Wavenet-B",
+		"fr-FR":  "fr-FR-Wavenet-B",
+		"hi-IN":  "hi-IN-Wavenet-D",
+		"ja-JP":  "ja-JP-Wavenet-B",
+		"ko-KR":  "ko-KR-Wavenet-A",
+		"pt-BR":  "pt-BR-Wavenet-A",
+		"ru-RU":  "ru-RU-Wavenet-A",
+	}
+	if voice := voices[languageCode]; voice != "" {
+		return voice
+	}
+	return "en-US-Wavenet-D"
 }
 
 func guessTTSLanguage(text string) string {

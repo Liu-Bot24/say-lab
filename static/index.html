@@ -52,64 +52,49 @@
                   <input id="cfg-llm-model" type="text" autocomplete="off">
                 </label>
                 <label>
-                  API Key
-                  <input id="cfg-llm-api-key" type="password" autocomplete="new-password">
-                </label>
-              </div>
-              <div class="form-row single-control">
-                <label>
                   Timeout
                   <input id="cfg-llm-timeout" type="number" min="1" step="1">
                 </label>
               </div>
+              <div class="form-row single-control">
+                <label>
+                  API Key
+                  <input id="cfg-llm-api-key" type="password" autocomplete="new-password">
+                </label>
+              </div>
             </section>
 
             <section class="config-section">
-              <h3>TTS 路由</h3>
-	              <div class="form-row">
-	                <label>
-	                  Default Provider
-                  <select id="cfg-tts-default-provider">
-                    <option value="auto">auto</option>
-                    <option value="google_chirp">google_chirp</option>
-                    <option value="google_wavenet">google_wavenet</option>
-                    <option value="custom">custom</option>
-                  </select>
+              <h3>Google TTS</h3>
+              <div class="form-row">
+                <label>
+                  Project ID
+                  <input id="cfg-google-project-id" type="text" autocomplete="off">
                 </label>
-	                <label>
-	                  Auto Order
-	                  <input id="cfg-tts-auto-order" type="text" autocomplete="off">
+                <label>
+                  Client Email
+                  <input id="cfg-google-client-email" type="text" autocomplete="off">
+                </label>
+              </div>
+              <div class="form-row">
+                <label>
+                  Private Key ID
+                  <input id="cfg-google-private-key-id" type="text" autocomplete="off">
+                </label>
+                <label>
+                  Private Key
+                  <input id="cfg-google-private-key" type="password" autocomplete="new-password">
                 </label>
               </div>
               <div class="form-row three">
                 <label>
-	                  Chirp Limit
-	                  <input id="cfg-limit-google-chirp" type="number" min="0" step="1">
-	                </label>
-	                <label>
-                  WaveNet Limit
-                  <input id="cfg-limit-google-wavenet" type="number" min="0" step="1">
+                  Token URL
+                  <input id="cfg-google-token-url" type="text" autocomplete="off">
                 </label>
                 <label>
-                  Custom Limit
-                  <input id="cfg-limit-custom" type="number" min="0" step="1">
+                  TTS URL
+                  <input id="cfg-google-tts-url" type="text" autocomplete="off">
                 </label>
-              </div>
-            </section>
-
-            <section class="config-section">
-              <h3>Google TTS Relay</h3>
-              <div class="form-row">
-                <label>
-                  Endpoint
-                  <input id="cfg-google-endpoint" type="text" autocomplete="off">
-                </label>
-                <label>
-                  Relay Secret
-                  <input id="cfg-google-secret" type="password" autocomplete="new-password">
-                </label>
-              </div>
-              <div class="form-row single-control">
                 <label>
                   Timeout
                   <input id="cfg-google-timeout" type="number" min="1" step="1">
@@ -118,7 +103,7 @@
             </section>
 
             <section class="config-section">
-              <h3>自定义 TTS</h3>
+              <h3>自定义 TTS（OpenAI-compatible Speech API）</h3>
               <div class="form-row">
                 <label>
                   Base URL
@@ -151,6 +136,39 @@
                 <label>
                   Timeout
                   <input id="cfg-custom-timeout" type="number" min="1" step="1">
+                </label>
+              </div>
+            </section>
+
+            <section class="config-section">
+              <h3>TTS 路由</h3>
+              <div class="form-row">
+                <label>
+                  Default Provider
+                  <select id="cfg-tts-default-provider">
+                    <option value="auto">auto</option>
+                    <option value="google_chirp">google_chirp</option>
+                    <option value="google_wavenet">google_wavenet</option>
+                    <option value="custom">custom</option>
+                  </select>
+                </label>
+                <label>
+                  Auto Order
+                  <input id="cfg-tts-auto-order" type="text" autocomplete="off">
+                </label>
+              </div>
+              <div class="form-row three">
+                <label>
+                  Chirp Limit
+                  <input id="cfg-limit-google-chirp" type="number" min="0" step="1">
+                </label>
+                <label>
+                  WaveNet Limit
+                  <input id="cfg-limit-google-wavenet" type="number" min="0" step="1">
+                </label>
+                <label>
+                  Custom Limit
+                  <input id="cfg-limit-custom" type="number" min="0" step="1">
                 </label>
               </div>
             </section>

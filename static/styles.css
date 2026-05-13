@@ -172,9 +172,12 @@ h1 {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 22px 26px;
+  align-items: stretch;
 }
 
 .config-section {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
   padding-top: 18px;
   border-top: 1px solid rgba(55, 42, 32, 0.1);
@@ -184,6 +187,7 @@ h1 {
   margin: 0 0 14px;
   color: var(--ink);
   font-size: 18px;
+  line-height: 25px;
 }
 
 .config-actions {
@@ -318,6 +322,10 @@ label {
   color: var(--muted);
   font-size: 14px;
   font-weight: 700;
+}
+
+.config-empty-cell {
+  min-width: 0;
 }
 
 select,

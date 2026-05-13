@@ -126,9 +126,13 @@ function fillConfigForm(payload) {
   setField("cfg-limit-google-wavenet", cfg.tts.monthly_limits.google_wavenet);
   setField("cfg-limit-custom", cfg.tts.monthly_limits.custom);
 
-  setField("cfg-google-endpoint", cfg.tts.google_relay.endpoint);
-  setSecretField("cfg-google-secret", secrets.google_relay_secret);
-  setField("cfg-google-timeout", cfg.tts.google_relay.timeout);
+  setField("cfg-google-project-id", cfg.tts.google.project_id);
+  setField("cfg-google-client-email", cfg.tts.google.client_email);
+  setSecretField("cfg-google-private-key", secrets.google_private_key || secrets.google_service_account_json);
+  setField("cfg-google-private-key-id", cfg.tts.google.private_key_id);
+  setField("cfg-google-token-url", cfg.tts.google.token_url);
+  setField("cfg-google-tts-url", cfg.tts.google.tts_url);
+  setField("cfg-google-timeout", cfg.tts.google.timeout);
 
   setField("cfg-custom-base-url", cfg.tts.custom.base_url);
   setSecretField("cfg-custom-api-key", secrets.custom_api_key);
@@ -138,7 +142,7 @@ function fillConfigForm(payload) {
   setField("cfg-custom-speed", cfg.tts.custom.speed);
   setField("cfg-custom-timeout", cfg.tts.custom.timeout);
 
-  document.querySelectorAll("#config-form input, #config-form select").forEach((element) => {
+  document.querySelectorAll("#config-form input, #config-form select, #config-form textarea").forEach((element) => {
     element.disabled = !writable;
   });
   $("config-save").disabled = !writable;
@@ -158,9 +162,14 @@ function collectConfigForm() {
   cfg.tts.monthly_limits.google_wavenet = numberFieldValue("cfg-limit-google-wavenet", 0);
   cfg.tts.monthly_limits.custom = numberFieldValue("cfg-limit-custom", 0);
 
-  cfg.tts.google_relay.endpoint = fieldValue("cfg-google-endpoint");
-  cfg.tts.google_relay.relay_secret = fieldValue("cfg-google-secret");
-  cfg.tts.google_relay.timeout = numberFieldValue("cfg-google-timeout", cfg.tts.google_relay.timeout);
+  cfg.tts.google.service_account_json = "";
+  cfg.tts.google.project_id = fieldValue("cfg-google-project-id");
+  cfg.tts.google.client_email = fieldValue("cfg-google-client-email");
+  cfg.tts.google.private_key = fieldValue("cfg-google-private-key");
+  cfg.tts.google.private_key_id = fieldValue("cfg-google-private-key-id");
+  cfg.tts.google.token_url = fieldValue("cfg-google-token-url");
+  cfg.tts.google.tts_url = fieldValue("cfg-google-tts-url");
+  cfg.tts.google.timeout = numberFieldValue("cfg-google-timeout", cfg.tts.google.timeout);
 
   cfg.tts.custom.base_url = fieldValue("cfg-custom-base-url");
   cfg.tts.custom.api_key = fieldValue("cfg-custom-api-key");
@@ -177,6 +186,7 @@ function normalizeClientConfig(cfg) {
   cfg.tts = cfg.tts || {};
   cfg.tts.auto_order = cfg.tts.auto_order || [];
   cfg.tts.monthly_limits = cfg.tts.monthly_limits || {};
+  cfg.tts.google = cfg.tts.google || {};
   cfg.tts.google_relay = cfg.tts.google_relay || {};
   cfg.tts.custom = cfg.tts.custom || {};
   cfg.tts.labels = cfg.tts.labels || {};
@@ -285,6 +295,11 @@ function providerSelectHTML() {
 function bindStatusControls() {
   const providerSelect = $("tts-provider");
   if (!providerSelect) return;
+  const selectedProvider = (state.status?.providers || []).find((p) => p.name === state.ttsProvider);
+  if (state.ttsProvider !== "auto" && !selectedProvider?.configured) {
+    state.ttsProvider = "auto";
+    localStorage.setItem("say-lab-tts-provider", state.ttsProvider);
+  }
   providerSelect.value = state.ttsProvider;
   if (providerSelect.value !== state.ttsProvider) {
     state.ttsProvider = "auto";

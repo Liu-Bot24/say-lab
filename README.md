@@ -52,10 +52,10 @@ cp config.example.json config.json
 
   // TTS 配置，用于朗读输入内容和跟读稿。
   "tts": {
-    // auto 会按 auto_order 自动选择可用服务。
+    // auto 会自动选择已配置且可用的 TTS 服务。
     "default_provider": "auto",
 
-    // 自动选择顺序。使用自定义 TTS 时可改成 ["custom"]。
+    // 自动选择优先级。只配置自定义 TTS 时也可保持默认。
     "auto_order": ["google_chirp", "google_wavenet"],
 
     // 月度字符上限。达到上限后 auto 会尝试下一个服务。
@@ -64,14 +64,25 @@ cp config.example.json config.json
       "google_wavenet": 4000000
     },
 
-    // Google TTS 中转服务，按需使用；不用中转时可以留空。
+    // Google TTS。填写 Google Cloud 服务账号里的对应字段。
+    "google": {
+      "project_id": "",
+      "client_email": "",
+      "private_key": "",
+      "private_key_id": "",
+      "token_url": "https://oauth2.googleapis.com/token",
+      "tts_url": "https://texttospeech.googleapis.com/v1/text:synthesize",
+      "timeout": 60
+    },
+
+    // Google TTS 中转服务，可选；前端配置面板不显示这一项。
     "google_relay": {
       "endpoint": "",
       "relay_secret": "",
       "timeout": 60
     },
 
-    // 自定义 TTS。填写后把 default_provider 设为 custom。
+    // 自定义 TTS。只使用自定义 TTS 时，填好这里并保持 default_provider 为 auto 即可。
     "custom": {
       "base_url": "",
       "api_key": "",
@@ -96,11 +107,12 @@ cp config.example.json config.json
 | `listen` | 服务监听地址 | 反向代理部署时可保持 `127.0.0.1:5567` |
 | `data_file` | TTS 月度字符统计 | 默认 `data/usage.json` |
 | `llm.*` | 发音说明和跟读稿使用的大模型 | 填 `base_url`、`model`、`api_key` |
-| `tts.default_provider` | 默认朗读服务 | Google 示例用 `auto`；自定义 TTS 用 `custom` |
-| `tts.auto_order` | `auto` 时的选择顺序 | Google 示例为 `google_chirp`、`google_wavenet` |
+| `tts.default_provider` | 默认朗读服务 | 通常保持 `auto` |
+| `tts.auto_order` | `auto` 时的选择顺序 | 默认顺序：`google_chirp`、`google_wavenet`、`custom` |
 | `tts.monthly_limits` | provider 月度字符上限 | 达到上限后，`auto` 会尝试下一个 provider |
-| `tts.google_relay.*` | Google TTS 中转 | 按需填写 `endpoint` 和 `relay_secret` |
-| `tts.custom.*` | 自定义 TTS | 填好后把 `tts.default_provider` 设为 `custom` |
+| `tts.google.*` | Google TTS | 填 `project_id`、`client_email`、`private_key` |
+| `tts.google_relay.*` | Google TTS 中转 | 仅需要中转时在配置文件或环境变量里填写 |
+| `tts.custom.*` | 自定义 TTS | OpenAI-compatible Speech API |
 
 常用环境变量：
 
@@ -108,10 +120,25 @@ cp config.example.json config.json
 | --- | --- |
 | `SAY_CONFIG` | 配置文件路径 |
 | `SAY_LLM_API_KEY` | `llm.api_key` |
+| `SAY_LLM_BASE_URL` | `llm.base_url` |
+| `SAY_LLM_ENDPOINT` | `llm.endpoint` |
+| `SAY_LLM_MODEL` | `llm.model` |
+| `SAY_LLM_TIMEOUT` | `llm.timeout` |
+| `SAY_GOOGLE_PROJECT_ID` | `tts.google.project_id` |
+| `SAY_GOOGLE_CLIENT_EMAIL` | `tts.google.client_email` |
+| `SAY_GOOGLE_PRIVATE_KEY_ID` | `tts.google.private_key_id` |
+| `SAY_GOOGLE_PRIVATE_KEY` | `tts.google.private_key` |
+| `SAY_GOOGLE_TTS_URL` | `tts.google.tts_url` |
 | `SAY_GOOGLE_RELAY_SECRET` | `tts.google_relay.relay_secret` |
+| `SAY_GOOGLE_RELAY_ENDPOINT` | `tts.google_relay.endpoint` |
+| `SAY_TTS_DEFAULT_PROVIDER` | `tts.default_provider` |
+| `SAY_TTS_AUTO_ORDER` | `tts.auto_order` |
 | `SAY_TTS_CUSTOM_API_KEY` | `tts.custom.api_key` |
+| `SAY_TTS_CUSTOM_BASE_URL` | `tts.custom.base_url` |
+| `SAY_TTS_CUSTOM_MODEL` | `tts.custom.model` |
+| `SAY_TTS_CUSTOM_VOICE` | `tts.custom.voice` |
 
-也可通过前端界面配置。
+也可通过前端界面配置大模型、Google TTS、自定义 TTS 和 TTS 路由。
 
 ![Say Lab 配置面板截图](docs/images/say-lab-config.jpg)
 
