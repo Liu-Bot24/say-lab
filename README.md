@@ -1,6 +1,6 @@
 # Say Lab Demo
 
-![Say Lab 横幅](docs/images/say-lab-banner.png)
+![Say Lab 横幅](docs/images/say-lab-banner.jpg)
 
 一个轻量自托管发音练习页面Demo，只带有静态页面和必要请求转发，授权和配置信息保存在本地浏览器。完成必要配置，输入单词、短语、句子或发音疑问，让大模型生成发音说明和双语跟读稿，再用云端 TTS 朗读。
 

@@ -1,6 +1,6 @@
 # Say Lab Demo
 
-![Say Lab banner](docs/images/say-lab-banner.png)
+![Say Lab banner](docs/images/say-lab-banner.jpg)
 
 A lightweight self-hosted pronunciation practice page demo with only static pages and the necessary request forwarding. Authorization and configuration stay in the local browser. After configuration, enter a word, phrase, sentence, or pronunciation question, let the LLM generate pronunciation notes and a bilingual read-along script, then play it with cloud TTS.
 
