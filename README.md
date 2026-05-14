@@ -1,8 +1,10 @@
 # Say Lab
 
-![Say Lab 横幅](docs/images/say-lab-banner.png)
+![Say Lab 横幅](docs/images/say-lab-banner.jpg)
 
 这是一个轻量自托管发音练习页面。你可以输入单词、短语、句子或发音疑问，让大模型生成发音说明和双语跟读稿，再用云端 TTS 朗读。
+
+Demo 地址：[https://demo.saylab.ganfan.work/](https://demo.saylab.ganfan.work/)
 
 英文文档：[README.en.md](README.en.md)
 

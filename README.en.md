@@ -1,8 +1,10 @@
 # Say Lab
 
-![Say Lab banner](docs/images/say-lab-banner.png)
+![Say Lab banner](docs/images/say-lab-banner.jpg)
 
 This is a self-hosted pronunciation practice page. Enter a word, phrase, sentence, or pronunciation question, then let a chat model generate pronunciation notes and a bilingual read-along script with cloud TTS playback.
+
+Demo: [https://demo.saylab.ganfan.work/](https://demo.saylab.ganfan.work/)
 
 中文文档：[README.md](README.md)
 
