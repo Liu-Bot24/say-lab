@@ -1,0 +1,19 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "say-lab",
+  "account_id": "22bd0123bdea39baedbbafe777136517",
+  "main": "worker/index.js",
+  "compatibility_date": "2026-05-13",
+  "routes": [
+    {
+      "pattern": "demo.saylab.ganfan.work",
+      "custom_domain": true
+    }
+  ],
+  "assets": {
+    "directory": "./static",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  }
+}
