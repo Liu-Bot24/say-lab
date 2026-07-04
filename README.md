@@ -1,5 +1,7 @@
 # Say Lab
 
+![Stars](https://img.shields.io/github/stars/Liu-Bot24/say-lab?style=flat&label=Stars&cache=20260704) ![Forks](https://img.shields.io/github/forks/Liu-Bot24/say-lab?style=flat&label=Forks&cache=20260704) ![Views 14d](https://github-stats.liu-qi.cn/api/badge/Liu-Bot24/say-lab/views14d.svg?v=4) ![Clones 14d](https://github-stats.liu-qi.cn/api/badge/Liu-Bot24/say-lab/clones14d.svg?v=4)
+
 ![Say Lab 横幅](docs/images/say-lab-banner.jpg)
 
 这是一个轻量自托管发音练习页面。你可以输入单词、短语、句子或发音疑问，让大模型生成发音说明和双语跟读稿，再用云端 TTS 朗读。
